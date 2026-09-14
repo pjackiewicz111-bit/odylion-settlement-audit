@@ -129,7 +129,7 @@ const calculateOffer = (offer: OfferValues, mass: number, offerName: string): Ca
   };
 };
 
-const offerLabel = (key: OfferKey) => (key === "a" ? "Oferta A" : "Oferta B");
+const offerLabel = (key: OfferKey) => (key === "a" ? "Oferta Odylionu" : "Inna oferta");
 
 export default function Home() {
   const [values, setValues] = useState<CalculatorValues>(initialValues);
@@ -194,8 +194,8 @@ export default function Home() {
     const message = [
       "Dzień dobry, porównałem/am dwie oferty.",
       `Materiał: ${material.label}; masa: ok. ${formatNumber(mass)} kg.`,
-      `A: ${values.offers.a.rate} zł/kg → ${formatCurrency(calculations.a.amount)}.`,
-      `B: ${values.offers.b.rate} zł/kg → ${formatCurrency(calculations.b.amount)}.`,
+      `Oferta Odylionu: ${values.offers.a.rate} zł/kg → ${formatCurrency(calculations.a.amount)}.`,
+      `Inna oferta: ${values.offers.b.rate} zł/kg → ${formatCurrency(calculations.b.amount)}.`,
       comparison,
       "Proszę o porównywalną wycenę po weryfikacji materiału.",
     ].join(" ");
@@ -214,7 +214,7 @@ export default function Home() {
           <p className="eyebrow">Narzędzie pomocnicze dla firm</p>
           <h1 id="page-title">Porównaj realne rozliczenie partii — nie tylko stawkę za kg.</h1>
           <p className="hero__lead">
-            Wpisz tylko materiał, przybliżoną masę i dwie stawki. Zobaczysz różnicę w wartości
+            Wklej stawkę z oferty Odylionu i porównywanej oferty. Zobaczysz różnicę w wartości
             rozliczenia oraz to, których warunków jeszcze nie znasz.
           </p>
           <div className="hero__facts" aria-label="Najważniejsze zasady narzędzia">
@@ -302,13 +302,16 @@ export default function Home() {
             <legend>
               <span>03</span> Jakie są stawki?
             </legend>
-            <p className="field-help">Wpisz stawkę z obu ofert. To jedyne liczby wymagane do porównania.</p>
+            <p className="field-help">
+              Najpierw wklej stawkę z oferty Odylionu, potem stawkę z innej oferty. To jedyne
+              liczby wymagane do porównania.
+            </p>
             <div className="offer-grid">
               {(["a", "b"] as OfferKey[]).map((key) => (
                 <section className="offer-card" key={key} aria-labelledby={`offer-${key}-title`}>
                   <div className="offer-card__topline">
                     <p id={`offer-${key}-title`}>{offerLabel(key)}</p>
-                    <span>stawka za kg</span>
+                    <span>{key === "a" ? "wklej stawkę Odylionu" : "stawka za kg"}</span>
                   </div>
                   <label htmlFor={`rate-${key}`}>
                     <span className="sr-only">Stawka za kilogram, {offerLabel(key)}</span>
@@ -317,7 +320,7 @@ export default function Home() {
                         id={`rate-${key}`}
                         inputMode="decimal"
                         onChange={(event) => setOfferValue(key, "rate", event.target.value)}
-                        placeholder="np. 8,20"
+                        placeholder={key === "a" ? "wklej np. 8,20" : "np. 8,20"}
                         type="text"
                         value={values.offers[key].rate}
                       />
