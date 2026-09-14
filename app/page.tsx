@@ -83,7 +83,10 @@ const formatNumber = (value: number, maximumFractionDigits = 2) =>
   new Intl.NumberFormat("pl-PL", { maximumFractionDigits }).format(value);
 
 const readNumber = (value: string) => {
-  const parsed = Number(value.replace(/\s/g, "").replace(",", ".").trim());
+  const normalized = value.replace(/\s/g, "").replace(",", ".").trim();
+  if (!normalized) return undefined;
+
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
