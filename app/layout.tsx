@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Porównaj realne rozliczenie partii | Odylion",
+  title: "Audyt rozliczenia dostawy | Odylion",
   description:
-    "Proste porównanie dwóch ofert skupu: wartość rozliczenia, koszty i efektywna stawka za kilogram.",
+    "W 90 sekund sprawdź, jakich warunków brakuje, aby uczciwie porównać rozliczenie dostawy materiału.",
   robots: {
     index: false,
     follow: false,

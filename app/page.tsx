@@ -1,500 +1,388 @@
 "use client";
 
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
-type Material = {
-  id: string;
-  label: string;
-  hint: string;
+type MaterialId =
+  | "aluminium"
+  | "miedz"
+  | "mosiadz"
+  | "nierdzewka"
+  | "kable"
+  | "silniki"
+  | "stal"
+  | "inne";
+
+type DocumentType = "settlement" | "offer" | "delivery";
+type CheckId = "weight" | "rate" | "deductions" | "transport";
+type CheckAnswer = "yes" | "no" | "unknown";
+type PaymentAnswer = "same-day" | "up-to-7" | "later" | "unknown";
+
+type AuditValues = {
+  material: MaterialId | "";
+  documentType: DocumentType | "";
+  checks: Record<CheckId, CheckAnswer>;
+  payment: PaymentAnswer;
 };
 
-type OfferKey = "a" | "b";
-
-type OfferValues = {
-  rate: string;
-  deduction: string;
-  transport: string;
-  otherCosts: string;
-  paymentTerms: string;
-};
-
-type CalculatorValues = {
-  material: string;
-  massPreset: string;
-  customMass: string;
-  offers: Record<OfferKey, OfferValues>;
-};
-
-type Calculation = {
-  grossMass: number;
-  settledMass: number;
-  rate: number;
-  knownCosts: number;
-  amount: number;
-  effectiveRate: number;
-  unknowns: string[];
-};
-
-const materials: Material[] = [
-  { id: "aluminium", label: "Aluminium", hint: "profile, odlewy, felgi" },
-  { id: "miedz", label: "Miedź", hint: "Cu, granulat, milbera" },
-  { id: "mosiadz-braz", label: "Mosiądz i brąz", hint: "żółty metal, M58, M63" },
-  { id: "stal-nierdzewna", label: "Stal nierdzewna", hint: "CrNi i metale specjalne" },
-  { id: "kable", label: "Kable i przewody", hint: "wiązki, linka Al, instalacje" },
-  { id: "silniki", label: "Silniki elektryczne", hint: "wirniki, stojany, alternatory" },
-  { id: "cynk-olow", label: "Cynk i ołów", hint: "blacha, znal, ołów" },
-  { id: "zlom-stalowy", label: "Złom stalowy", hint: "wsad i niewsad" },
-  { id: "makulatura", label: "Makulatura", hint: "karton, mix, bela" },
+const materials: Array<{ id: MaterialId; label: string; note: string }> = [
+  { id: "aluminium", label: "Aluminium", note: "profile, odlewy, felgi" },
+  { id: "miedz", label: "Miedź", note: "Cu, granulat, milbera" },
+  { id: "mosiadz", label: "Mosiądz / brąz", note: "żółty metal, M58, M63" },
+  { id: "nierdzewka", label: "Nierdzewka", note: "CrNi i inne stopy" },
+  { id: "kable", label: "Kable / przewody", note: "wiązki, linka Al" },
+  { id: "silniki", label: "Silniki", note: "wirniki, stojany, alternatory" },
+  { id: "stal", label: "Złom stalowy", note: "wsad i niewsad" },
+  { id: "inne", label: "Inny materiał", note: "nie musisz znać gatunku" },
 ];
 
-const massPresets = [
-  { value: "100", label: "ok. 100 kg" },
-  { value: "500", label: "ok. 500 kg" },
-  { value: "1000", label: "ok. 1 t" },
-  { value: "5000", label: "ok. 5 t" },
+const documentTypes: Array<{ id: DocumentType; label: string; note: string }> = [
+  { id: "settlement", label: "Rozliczenie po dostawie", note: "faktura, kwit lub zestawienie" },
+  { id: "offer", label: "Otrzymana oferta", note: "wiadomość, SMS, e-mail lub PDF" },
+  { id: "delivery", label: "Dokument dostawy", note: "waga, WZ albo potwierdzenie odbioru" },
 ];
 
-const initialOffer: OfferValues = {
-  rate: "",
-  deduction: "",
-  transport: "",
-  otherCosts: "",
-  paymentTerms: "",
-};
-
-const initialValues: CalculatorValues = {
-  material: "",
-  massPreset: "500",
-  customMass: "",
-  offers: {
-    a: { ...initialOffer },
-    b: { ...initialOffer },
+const checkDefinitions: Array<{ id: CheckId; question: string; help: string }> = [
+  {
+    id: "weight",
+    question: "Czy widzisz masę netto rozliczenia?",
+    help: "Sama masa brutto bez tary nie pozwala porównać wyniku.",
   },
+  {
+    id: "rate",
+    question: "Czy dokument podaje stawkę i gatunek materiału?",
+    help: "„Miedź” i „miedź niesortowana” nie są tym samym w rozliczeniu.",
+  },
+  {
+    id: "deductions",
+    question: "Czy wiesz, czy zastosowano potrącenia?",
+    help: "Np. z tytułu zanieczyszczeń, wilgoci lub innego ustalenia.",
+  },
+  {
+    id: "transport",
+    question: "Czy wiesz, kto i za ile rozlicza transport?",
+    help: "Transport może być ustaleniem poza samą stawką za kilogram.",
+  },
+];
+
+const initialValues: AuditValues = {
+  material: "",
+  documentType: "",
+  checks: {
+    weight: "unknown",
+    rate: "unknown",
+    deductions: "unknown",
+    transport: "unknown",
+  },
+  payment: "unknown",
 };
 
-const formatCurrency = (amount: number) =>
-  new Intl.NumberFormat("pl-PL", {
-    style: "currency",
-    currency: "PLN",
-    maximumFractionDigits: 2,
-  }).format(amount);
-
-const formatNumber = (value: number, maximumFractionDigits = 2) =>
-  new Intl.NumberFormat("pl-PL", { maximumFractionDigits }).format(value);
-
-const readNumber = (value: string) => {
-  const normalized = value.replace(/\s/g, "").replace(",", ".").trim();
-  if (!normalized) return undefined;
-
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
+const answerLabels: Record<CheckAnswer, string> = {
+  yes: "tak",
+  no: "nie",
+  unknown: "nie wiem",
 };
 
-const readNonNegativeNumber = (value: string) => {
-  const parsed = readNumber(value);
-  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+const paymentLabels: Record<PaymentAnswer, string> = {
+  "same-day": "tego samego dnia",
+  "up-to-7": "do 7 dni",
+  later: "później niż za 7 dni",
+  unknown: "nie wiem",
 };
 
-const readDeduction = (value: string) => {
-  const parsed = readNonNegativeNumber(value);
-  return parsed !== undefined && parsed <= 100 ? parsed : undefined;
-};
-
-const selectedMass = (values: CalculatorValues) =>
-  values.massPreset === "custom" ? readNumber(values.customMass) : readNumber(values.massPreset);
-
-const calculateOffer = (offer: OfferValues, mass: number, offerName: string): Calculation => {
-  const rate = readNumber(offer.rate) ?? 0;
-  const deduction = readDeduction(offer.deduction);
-  const transport = readNonNegativeNumber(offer.transport);
-  const otherCosts = readNonNegativeNumber(offer.otherCosts);
-  const settledMass = deduction === undefined ? mass : mass * (1 - deduction / 100);
-  const knownCosts = (transport ?? 0) + (otherCosts ?? 0);
-  const amount = settledMass * rate - knownCosts;
-  const unknowns: string[] = [];
-
-  if (deduction === undefined) unknowns.push(`potrącenie masy w Ofercie ${offerName}`);
-  if (transport === undefined) unknowns.push(`koszt transportu w Ofercie ${offerName}`);
-  if (otherCosts === undefined) unknowns.push(`inne koszty w Ofercie ${offerName}`);
-  if (!offer.paymentTerms.trim()) unknowns.push(`termin płatności w Ofercie ${offerName}`);
-
-  return {
-    grossMass: mass,
-    settledMass,
-    rate,
-    knownCosts,
-    amount,
-    effectiveRate: amount / mass,
-    unknowns,
-  };
-};
-
-const offerLabel = (key: OfferKey) => (key === "a" ? "Oferta Odylionu" : "Inna oferta");
+function titleForDocument(type: DocumentType) {
+  if (type === "settlement") return "rozliczenie";
+  if (type === "offer") return "ofertę";
+  return "dokument dostawy";
+}
 
 export default function Home() {
-  const [values, setValues] = useState<CalculatorValues>(initialValues);
-  const [hasCalculated, setHasCalculated] = useState(false);
-  const [validationMessage, setValidationMessage] = useState("");
-  const resultRef = useRef<HTMLElement>(null);
-
-  const mass = selectedMass(values);
+  const [values, setValues] = useState<AuditValues>(initialValues);
+  const [copyMessage, setCopyMessage] = useState("");
   const material = materials.find((item) => item.id === values.material);
-  const hasValidMass = mass !== undefined && mass > 0;
-  const hasValidRates =
-    (readNumber(values.offers.a.rate) ?? 0) > 0 && (readNumber(values.offers.b.rate) ?? 0) > 0;
-  const isReady = Boolean(material && hasValidMass && hasValidRates);
+  const isReady = Boolean(material && values.documentType);
 
-  const calculations = useMemo(() => {
-    if (!hasValidMass) return undefined;
+  const audit = useMemo(() => {
+    if (!material || !values.documentType) return undefined;
 
-    return {
-      a: calculateOffer(values.offers.a, mass, "A"),
-      b: calculateOffer(values.offers.b, mass, "B"),
-    };
-  }, [hasValidMass, mass, values.offers]);
+    const missing = checkDefinitions.filter((check) => values.checks[check.id] !== "yes");
+    const paymentKnown = values.payment !== "unknown";
+    const totalGaps = missing.length + (paymentKnown ? 0 : 1);
+    const status =
+      totalGaps === 0
+        ? {
+            label: "można porównać",
+            tone: "ready",
+            lead: "Masz większość informacji potrzebnych, aby pytać o realny wynik — nie tylko stawkę za kg.",
+          }
+        : totalGaps <= 2
+          ? {
+              label: "prawie gotowe",
+              tone: "partial",
+              lead: "Brakuje kilku warunków, ale już wiesz dokładnie, o co dopytać przed podjęciem decyzji.",
+            }
+          : {
+              label: "wymaga wyjaśnienia",
+              tone: "attention",
+              lead: "Samej stawki nie da się jeszcze uczciwie porównać. Najpierw uporządkuj warunki rozliczenia.",
+            };
 
-  const difference = calculations ? calculations.a.amount - calculations.b.amount : 0;
-  const winningOffer: OfferKey = difference >= 0 ? "a" : "b";
-  const unknowns = calculations ? [...calculations.a.unknowns, ...calculations.b.unknowns] : [];
+    const actions: string[] = [];
 
-  const setOfferValue = (key: OfferKey, field: keyof OfferValues, value: string) => {
-    setValues((current) => ({
-      ...current,
-      offers: {
-        ...current.offers,
-        [key]: {
-          ...current.offers[key],
-          [field]: value,
-        },
-      },
-    }));
-  };
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (!isReady) {
-      setHasCalculated(false);
-      setValidationMessage("Wybierz materiał i masę oraz wpisz dwie stawki większe od zera.");
-      return;
+    if (values.checks.weight !== "yes") {
+      actions.push("Ustal masę netto oraz — jeśli dotyczy — tarę i sposób ważenia.");
+    }
+    if (values.checks.rate !== "yes") {
+      actions.push("Poproś o stawkę przypisaną do konkretnego gatunku materiału.");
+    }
+    if (values.checks.deductions !== "yes") {
+      actions.push("Dopytaj o potrącenia i warunek, od którego są liczone.");
+    }
+    if (values.checks.transport !== "yes") {
+      actions.push("Potwierdź, czy transport zmienia kwotę końcowego rozliczenia.");
+    }
+    if (!paymentKnown) {
+      actions.push("Potwierdź formę i termin płatności, zanim porównasz dwie propozycje.");
+    }
+    if (actions.length === 0) {
+      actions.push("Porównaj końcową kwotę, masę netto i warunki płatności — razem, nie osobno.");
+      actions.push("Przy nieoczywistym stopie zachowaj zdjęcie partii lub opis gatunku do weryfikacji.");
     }
 
-    setValidationMessage("");
-    setHasCalculated(true);
-    window.requestAnimationFrame(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  };
-
-  const whatsappUrl = useMemo(() => {
-    if (!calculations || !material || !hasValidMass) return "https://wa.me/48790686856";
-
-    const comparison =
-      difference === 0
-        ? "Wynik z podanych danych jest taki sam."
-        : `${offerLabel(winningOffer)} wypada wyżej o ${formatCurrency(Math.abs(difference))}.`;
-    const message = [
-      "Dzień dobry, porównałem/am dwie oferty.",
-      `Materiał: ${material.label}; masa: ok. ${formatNumber(mass)} kg.`,
-      `Oferta Odylionu: ${values.offers.a.rate} zł/kg → ${formatCurrency(calculations.a.amount)}.`,
-      `Inna oferta: ${values.offers.b.rate} zł/kg → ${formatCurrency(calculations.b.amount)}.`,
-      comparison,
-      "Proszę o porównywalną wycenę po weryfikacji materiału.",
+    const summary = [
+      "Dzień dobry, korzystam z Audytu rozliczenia dostawy Odylion.",
+      `Materiał: ${material.label}. Analizuję: ${titleForDocument(values.documentType)}.`,
+      `Masa netto: ${answerLabels[values.checks.weight]}; stawka i gatunek: ${answerLabels[values.checks.rate]}; potrącenia: ${answerLabels[values.checks.deductions]}; transport: ${answerLabels[values.checks.transport]}; płatność: ${paymentLabels[values.payment]}.`,
+      "Chcę przesłać zanonimizowany dokument do drugiej opinii i zapytać o porównywalną wycenę.",
     ].join(" ");
 
-    return `https://wa.me/48790686856?text=${encodeURIComponent(message)}`;
-  }, [calculations, difference, hasValidMass, mass, material, values.offers, winningOffer]);
+    return { materialLabel: material.label, status, actions: actions.slice(0, 3), summary };
+  }, [material, values]);
+
+  const whatsappUrl = audit
+    ? `https://wa.me/48790686856?text=${encodeURIComponent(audit.summary)}`
+    : "https://wa.me/48790686856";
+
+  const copySummary = async () => {
+    if (!audit) return;
+    try {
+      await navigator.clipboard.writeText(audit.summary);
+      setCopyMessage("Podsumowanie skopiowane.");
+    } catch {
+      setCopyMessage("Nie udało się skopiować. Zaznacz tekst ręcznie.");
+    }
+  };
 
   return (
     <main>
-      <a className="skip-link" href="#kalkulator">
-        Przejdź do kalkulatora
+      <a className="skip-link" href="#audyt">
+        Przejdź do audytu
       </a>
 
-      <section className="hero" aria-labelledby="page-title">
+      <header className="site-header shell">
+        <a className="brand" href="https://www.odylion.com/" aria-label="Odylion — strona główna">
+          <span className="brand-mark" aria-hidden="true">O</span>
+          ODYLION
+        </a>
+        <p>Audyt rozliczenia dostawy</p>
+      </header>
+
+      <section className="hero">
         <div className="shell hero__inner">
-          <p className="eyebrow">Narzędzie pomocnicze dla firm</p>
-          <h1 id="page-title">Porównaj realne rozliczenie partii — nie tylko stawkę za kg.</h1>
-          <p className="hero__lead">
-            Wklej stawkę z oferty Odylionu i porównywanej oferty. Zobaczysz różnicę w wartości
-            rozliczenia oraz to, których warunków jeszcze nie znasz.
+          <p className="eyebrow">DLA FIRM · 90 SEKUND · BEZ KONTA</p>
+          <h1>Nie pytaj tylko o stawkę. Sprawdź, czego brakuje w rozliczeniu.</h1>
+          <p>
+            Przejdź przez kartę kontroli dla jednej oferty, faktury lub dostawy. Dostaniesz listę
+            pytań, które pomagają porównać realny wynik transakcji — zanim materiał wyjedzie.
           </p>
-          <div className="hero__facts" aria-label="Najważniejsze zasady narzędzia">
-            <span>Bez konta</span>
-            <span>Bez danych konkurencji</span>
-            <span>Bez obietnicy ceny</span>
+          <div className="hero__facts" aria-label="Najważniejsze zasady">
+            <span>bez wpisywania kwot</span>
+            <span>bez przesyłania dokumentu</span>
+            <span>bez pozornej wyceny</span>
           </div>
         </div>
       </section>
 
-      <section className="shell calculator" id="kalkulator" aria-labelledby="calculator-title">
-        <div className="section-heading">
-          <p className="eyebrow">3 krótkie kroki</p>
-          <h2 id="calculator-title">Podaj dane, które masz pod ręką</h2>
-          <p>Resztę możesz dodać później. Puste pola dodatkowe oznaczają „nie wiem”, a nie „zero”.</p>
-        </div>
+      <section className="workspace shell" id="audyt" aria-label="Audyt rozliczenia">
+        <div className="form-column">
+          <div className="section-heading">
+            <p className="eyebrow">KARTA KONTROLI</p>
+            <h2>Co masz przed sobą?</h2>
+            <p>Wybierasz tylko to, co już widać w dokumencie. Nie podajesz danych handlowych ani cen.</p>
+          </div>
 
-        <form onSubmit={handleSubmit} noValidate>
-          <fieldset className="form-section">
-            <legend>
-              <span>01</span> Jaki to materiał?
-            </legend>
-            <p className="field-help">Wystarczy grupa — dokładny gatunek sprawdzisz później.</p>
-            <div className="material-grid">
-              {materials.map((item) => (
-                <button
-                  className={`material-card ${values.material === item.id ? "is-selected" : ""}`}
-                  key={item.id}
-                  type="button"
-                  aria-pressed={values.material === item.id}
-                  onClick={() => setValues((current) => ({ ...current, material: item.id }))}
-                >
-                  <span>{item.label}</span>
-                  <small>{item.hint}</small>
-                </button>
-              ))}
+          <section className="step-card" aria-labelledby="material-title">
+            <div className="step-title">
+              <span>01</span>
+              <div>
+                <p className="eyebrow">MATERIAŁ</p>
+                <h3 id="material-title">Jaka partia jest na dokumencie?</h3>
+              </div>
             </div>
-          </fieldset>
-
-          <fieldset className="form-section">
-            <legend>
-              <span>02</span> Ile waży partia?
-            </legend>
-            <p className="field-help">Wybierz przybliżenie. Nie musisz znać masy co do kilograma.</p>
-            <div className="mass-options" role="radiogroup" aria-label="Przybliżona masa partii">
-              {massPresets.map((preset) => (
-                <label className="choice-chip" key={preset.value}>
-                  <input
-                    checked={values.massPreset === preset.value}
-                    name="mass"
-                    onChange={() => setValues((current) => ({ ...current, massPreset: preset.value }))}
-                    type="radio"
-                    value={preset.value}
-                  />
-                  <span>{preset.label}</span>
-                </label>
-              ))}
-              <label className="choice-chip choice-chip--custom">
-                <input
-                  checked={values.massPreset === "custom"}
-                  name="mass"
-                  onChange={() => setValues((current) => ({ ...current, massPreset: "custom" }))}
-                  type="radio"
-                  value="custom"
-                />
-                <span>Własna masa</span>
-              </label>
-            </div>
-            {values.massPreset === "custom" && (
-              <label className="inline-field" htmlFor="custom-mass">
-                <span>Przybliżona masa w kg</span>
-                <input
-                  id="custom-mass"
-                  inputMode="decimal"
-                  onChange={(event) => setValues((current) => ({ ...current, customMass: event.target.value }))}
-                  placeholder="np. 750"
-                  type="text"
-                  value={values.customMass}
-                />
-              </label>
-            )}
-          </fieldset>
-
-          <fieldset className="form-section">
-            <legend>
-              <span>03</span> Jakie są stawki?
-            </legend>
-            <p className="field-help">
-              Najpierw wklej stawkę z oferty Odylionu, potem stawkę z innej oferty. To jedyne
-              liczby wymagane do porównania.
-            </p>
-            <div className="offer-grid">
-              {(["a", "b"] as OfferKey[]).map((key) => (
-                <section className="offer-card" key={key} aria-labelledby={`offer-${key}-title`}>
-                  <div className="offer-card__topline">
-                    <p id={`offer-${key}-title`}>{offerLabel(key)}</p>
-                    <span>{key === "a" ? "wklej stawkę Odylionu" : "stawka za kg"}</span>
-                  </div>
-                  <label htmlFor={`rate-${key}`}>
-                    <span className="sr-only">Stawka za kilogram, {offerLabel(key)}</span>
-                    <div className="input-with-suffix">
-                      <input
-                        id={`rate-${key}`}
-                        inputMode="decimal"
-                        onChange={(event) => setOfferValue(key, "rate", event.target.value)}
-                        placeholder={key === "a" ? "wklej np. 8,20" : "np. 8,20"}
-                        type="text"
-                        value={values.offers[key].rate}
-                      />
-                      <span aria-hidden="true">zł/kg</span>
-                    </div>
-                  </label>
-                </section>
-              ))}
-            </div>
-          </fieldset>
-
-          <details className="advanced-fields">
-            <summary>Dodaj, jeśli je znasz <span>opcjonalnie</span></summary>
-            <p>
-              Wpisane potrącenia i koszty zostaną uwzględnione w obliczeniu. Puste pole pozostaje
-              oznaczone jako nieznane.
-            </p>
-            <div className="advanced-grid">
-              {(["a", "b"] as OfferKey[]).map((key) => (
-                <fieldset className="advanced-card" key={key}>
-                  <legend>{offerLabel(key)}</legend>
-                  <label htmlFor={`deduction-${key}`}>
-                    Potrącenie masy (%)
-                    <input
-                      id={`deduction-${key}`}
-                      inputMode="decimal"
-                      onChange={(event) => setOfferValue(key, "deduction", event.target.value)}
-                      placeholder="np. 2"
-                      type="text"
-                      value={values.offers[key].deduction}
-                    />
-                  </label>
-                  <label htmlFor={`transport-${key}`}>
-                    Koszt transportu (zł)
-                    <input
-                      id={`transport-${key}`}
-                      inputMode="decimal"
-                      onChange={(event) => setOfferValue(key, "transport", event.target.value)}
-                      placeholder="np. 300"
-                      type="text"
-                      value={values.offers[key].transport}
-                    />
-                  </label>
-                  <label htmlFor={`other-costs-${key}`}>
-                    Inne jawne koszty (zł)
-                    <input
-                      id={`other-costs-${key}`}
-                      inputMode="decimal"
-                      onChange={(event) => setOfferValue(key, "otherCosts", event.target.value)}
-                      placeholder="np. 100"
-                      type="text"
-                      value={values.offers[key].otherCosts}
-                    />
-                  </label>
-                  <label htmlFor={`payment-${key}`}>
-                    Termin płatności
-                    <input
-                      id={`payment-${key}`}
-                      onChange={(event) => setOfferValue(key, "paymentTerms", event.target.value)}
-                      placeholder="np. przelew 7 dni"
-                      type="text"
-                      value={values.offers[key].paymentTerms}
-                    />
-                  </label>
-                </fieldset>
-              ))}
-            </div>
-          </details>
-
-          {validationMessage && (
-            <p className="validation-message" role="alert">
-              {validationMessage}
-            </p>
-          )}
-          <button className="calculate-button" type="submit">
-            Porównaj rozliczenie <span aria-hidden="true">→</span>
-          </button>
-        </form>
-      </section>
-
-      {hasCalculated && calculations && material && hasValidMass && (
-        <section className="result-section" aria-live="polite" ref={resultRef} tabIndex={-1}>
-          <div className="shell">
-            <div className="result-heading">
-              <p className="eyebrow">Wynik z podanych danych</p>
-              <h2>
-                {difference === 0
-                  ? "Obie oferty dają ten sam wynik."
-                  : `${offerLabel(winningOffer)} wypada wyżej o ${formatCurrency(Math.abs(difference))}.`}
-              </h2>
-              <p>
-                Dla materiału: <strong>{material.label}</strong> · masa: <strong>ok. {formatNumber(mass)} kg</strong>
-              </p>
-            </div>
-
-            <div className="result-grid">
-              {(["a", "b"] as OfferKey[]).map((key) => {
-                const calculation = calculations[key];
-                const hasKnownDeduction = values.offers[key].deduction.trim().length > 0;
-
+            <div className="choice-grid material-grid" role="radiogroup" aria-label="Wybierz materiał">
+              {materials.map((item) => {
+                const selected = values.material === item.id;
                 return (
-                  <article className={`result-card ${winningOffer === key && difference !== 0 ? "is-winning" : ""}`} key={key}>
-                    <div className="result-card__header">
-                      <p>{offerLabel(key)}</p>
-                      {winningOffer === key && difference !== 0 && <span>wyższy wynik</span>}
-                    </div>
-                    <p className="result-total">{formatCurrency(calculation.amount)}</p>
-                    <p className="result-caption">rozliczenie z podanych danych</p>
-                    <dl>
-                      <div>
-                        <dt>Masa do rozliczenia</dt>
-                        <dd>
-                          {formatNumber(calculation.settledMass)} kg
-                          {!hasKnownDeduction && <small>bez uwzględnienia nieznanego potrącenia</small>}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Efektywna stawka</dt>
-                        <dd>{formatCurrency(calculation.effectiveRate)}/kg</dd>
-                      </div>
-                      <div>
-                        <dt>Znane koszty</dt>
-                        <dd>{formatCurrency(calculation.knownCosts)}</dd>
-                      </div>
-                    </dl>
-                  </article>
+                  <label
+                    className={`choice-card ${selected ? "is-selected" : ""}`}
+                    key={item.id}
+                  >
+                    <input
+                      checked={selected}
+                      name="material"
+                      onChange={() => setValues((current) => ({ ...current, material: item.id }))}
+                      type="radio"
+                      value={item.id}
+                    />
+                    <strong>{item.label}</strong>
+                    <span>{item.note}</span>
+                  </label>
                 );
               })}
             </div>
+          </section>
 
-            {unknowns.length > 0 && (
-              <aside className="unknowns" aria-labelledby="unknowns-title">
-                <div>
-                  <p className="eyebrow">Warto sprawdzić</p>
-                  <h3 id="unknowns-title">Tych warunków jeszcze nie znasz</h3>
-                </div>
-                <ul>
-                  {unknowns.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-                <p>
-                  Nie założyliśmy, że wynoszą zero. Mogą zmienić końcowe rozliczenie i różnicę między ofertami.
-                </p>
-              </aside>
-            )}
-
-            <div className="result-cta">
+          <section className="step-card" aria-labelledby="document-title">
+            <div className="step-title">
+              <span>02</span>
               <div>
-                <p className="eyebrow">Następny krok</p>
-                <h3>Chcesz porównywalną wycenę tej partii?</h3>
+                <p className="eyebrow">DOKUMENT</p>
+                <h3 id="document-title">Co sprawdzasz?</h3>
+              </div>
+            </div>
+            <div className="choice-grid document-grid" role="radiogroup" aria-label="Wybierz rodzaj dokumentu">
+              {documentTypes.map((item) => {
+                const selected = values.documentType === item.id;
+                return (
+                  <label
+                    className={`choice-card choice-card--document ${selected ? "is-selected" : ""}`}
+                    key={item.id}
+                  >
+                    <input
+                      checked={selected}
+                      name="document-type"
+                      onChange={() => setValues((current) => ({ ...current, documentType: item.id }))}
+                      type="radio"
+                      value={item.id}
+                    />
+                    <strong>{item.label}</strong>
+                    <span>{item.note}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="step-card" aria-labelledby="checks-title">
+            <div className="step-title">
+              <span>03</span>
+              <div>
+                <p className="eyebrow">PIĘĆ SZYBKICH SPRAWDZEŃ</p>
+                <h3 id="checks-title">Co naprawdę widać w warunkach?</h3>
+              </div>
+            </div>
+            <div className="check-list">
+              {checkDefinitions.map((check) => (
+                <fieldset className="check-row" key={check.id}>
+                  <legend>{check.question}</legend>
+                  <p>{check.help}</p>
+                  <div className="answer-options">
+                    {(["yes", "no", "unknown"] as CheckAnswer[]).map((answer) => (
+                      <label key={answer}>
+                        <input
+                          checked={values.checks[check.id] === answer}
+                          name={check.id}
+                          onChange={() =>
+                            setValues((current) => ({
+                              ...current,
+                              checks: { ...current.checks, [check.id]: answer },
+                            }))
+                          }
+                          type="radio"
+                        />
+                        <span>{answerLabels[answer]}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+              <fieldset className="check-row">
+                <legend>Jaki termin płatności widzisz?</legend>
+                <p>To część warunków transakcji, nawet gdy stawka wygląda dobrze.</p>
+                <div className="answer-options answer-options--payment">
+                  {(["same-day", "up-to-7", "later", "unknown"] as PaymentAnswer[]).map((answer) => (
+                    <label key={answer}>
+                      <input
+                        checked={values.payment === answer}
+                        name="payment"
+                        onChange={() => setValues((current) => ({ ...current, payment: answer }))}
+                        type="radio"
+                      />
+                      <span>{paymentLabels[answer]}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+          </section>
+        </div>
+
+        <aside className="result-panel" aria-live="polite" aria-atomic="true">
+          {!isReady || !audit ? (
+            <div className="empty-result">
+              <span aria-hidden="true">⌁</span>
+              <p className="eyebrow">TWOJA KARTA KONTROLI</p>
+              <h2>Wybierz materiał i rodzaj dokumentu.</h2>
+              <p>Potem wynik będzie aktualizował się po każdym kliknięciu — bez wysyłania formularza.</p>
+            </div>
+          ) : (
+            <div className="audit-result">
+              <div className="result-topline">
+                <p className="eyebrow">KARTA KONTROLI GOTOWA</p>
+                <span className={`status-badge status-badge--${audit.status.tone}`}>{audit.status.label}</span>
+              </div>
+              <h2>{audit.materialLabel}: co sprawdzić przed porównaniem?</h2>
+              <p className="result-lead">{audit.status.lead}</p>
+
+              <ol className="action-list">
+                {audit.actions.map((action) => (
+                  <li key={action}>{action}</li>
+                ))}
+              </ol>
+
+              <div className="privacy-note">
+                <span aria-hidden="true">◌</span>
                 <p>
-                  Prześlij krótkie podsumowanie i zdjęcia materiału. Końcowa wycena zależy od gatunku,
-                  jakości, ilości i logistyki.
+                  Chcesz drugą opinię? Przed wysłaniem dokumentu zamaskuj numery rachunków,
+                  adresy i inne dane, których nie trzeba pokazywać do oceny warunków.
                 </p>
               </div>
-              <div className="cta-actions">
-                <a className="button button--primary" href={whatsappUrl} rel="noreferrer" target="_blank">
-                  Napisz na WhatsApp <span aria-hidden="true">↗</span>
+
+              <div className="cta-box">
+                <p className="eyebrow">NASTĘPNY KROK</p>
+                <h3>Wyślij zanonimizowany dokument do drugiej opinii.</h3>
+                <p>Wiadomość otworzy się z gotowym kontekstem. Ty decydujesz, czy i co dołączasz.</p>
+                <a className="primary-button" href={whatsappUrl} rel="noreferrer" target="_blank">
+                  Zapytaj Odylion na WhatsApp <span aria-hidden="true">↗</span>
                 </a>
-                <a className="button button--secondary" href="https://www.odylion.com/wycena/" rel="noreferrer" target="_blank">
-                  Przejdź do wyceny
+                <button className="secondary-button" onClick={() => void copySummary()} type="button">
+                  Skopiuj podsumowanie
+                </button>
+                {copyMessage && <p className="copy-message" role="status">{copyMessage}</p>}
+                <a className="text-link" href="https://www.odylion.com/wycena/">
+                  Wolę formularz wyceny na odylion.com <span aria-hidden="true">→</span>
                 </a>
               </div>
             </div>
-          </div>
-        </section>
-      )}
+          )}
+        </aside>
+      </section>
 
       <footer className="shell footer">
-        <p>Narzędzie pomocnicze. Nie stanowi oferty handlowej ani potwierdzenia klasyfikacji materiału.</p>
-        <a href="https://www.odylion.com/" rel="noreferrer" target="_blank">
-          odylion.com <span aria-hidden="true">↗</span>
-        </a>
+        <p>
+          Narzędzie porządkuje pytania do rozliczenia — nie jest ofertą handlową ani audytem prawnym.
+          Ostateczna wycena materiału zależy m.in. od gatunku, jakości, ilości i logistyki.
+        </p>
+        <a href="https://www.odylion.com/">Odylion.com</a>
       </footer>
     </main>
   );
